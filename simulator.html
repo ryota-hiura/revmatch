@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>928GT Virtual Test Bench & V8 Sound Synth</title>
+<style>
+  * { box-sizing: border-box; font-family: 'Segoe UI', monospace; }
+  body {
+    background: #111318;
+    color: #f0f2f5;
+    max-width: 720px;
+    margin: 20px auto;
+    padding: 16px;
+  }
+  h1 { font-size: 1.2rem; color: #ff9e00; border-bottom: 1px solid #2c313c; padding-bottom: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0; }
+  .box { background: #1a1d24; border: 1px solid #2c313c; border-radius: 8px; padding: 14px; text-align: center; }
+  .label { font-size: 0.75rem; color: #8c95a6; }
+  .val { font-size: 2.2rem; font-weight: bold; color: #00e676; margin-top: 4px; }
+  .controls { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+  button {
+    padding: 14px;
+    font-size: 1rem;
+    font-weight: bold;
+    border-radius: 8px;
+    border: 1px solid #3a4150;
+    background: #232732;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:active, button.active { background: #ff9e00; color: #000; border-color: #ff9e00; }
+  button.primary { background: #00b0ff; color: #000; border: none; }
+  .pedal-bar { margin: 10px 0; display: flex; align-items: center; gap: 10px; }
+  .pedal-bar input { flex: 1; }
+  .info { background: #18202c; padding: 12px; border-radius: 8px; font-size: 0.85rem; line-height: 1.5; color: #b8c4d4; }
+</style>
+</head>
+<body>
+
+<h1>928GT VIRTUAL TEST BENCH (V8 SOUND & TELEMETRY)</h1>
+
+<div style="display:flex; gap:10px; margin-bottom:12px;">
+  <button id="btnAudio" class="primary" style="flex:1;">1. エンジン始動（V8サウンドON）</button>
+  <button id="btnScenario" style="flex:1;">2. 自動シフトダウン模擬テスト</button>
+</div>
+
+<div class="grid">
+  <div class="box">
+    <div class="label">VIRTUAL SPEED (GPS)</div>
+    <div class="val" id="simSpeed">80</div>
+    <div class="label">km/h</div>
+  </div>
+  <div class="box">
+    <div class="label">GEAR / CLUTCH</div>
+    <div class="val" id="simGear" style="color:#ff9e00;">4</div>
+    <div class="label" id="simClutch">ENGAGED</div>
+  </div>
+  <div class="box">
+    <div class="label">ENGINE RPM</div>
+    <div class="val" id="simRpm">2550</div>
+    <div class="label" id="simHz">170.0 Hz</div>
+  </div>
+</div>
+
+<div class="box" style="text-align:left; margin-bottom:16px;">
+  <div class="pedal-bar">
+    <span style="width:90px;">スロットル:</span>
+    <input type="range" id="throttle" min="0" max="100" value="25">
+    <span id="valThrottle" style="width:45px;">25%</span>
+  </div>
+  <div class="pedal-bar">
+    <span style="width:90px;">ブレーキ:</span>
+    <input type="range" id="brake" min="0" max="100" value="0">
+    <span id="valBrake" style="width:45px;">0%</span>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btnClutch">クラッチ踏む (ホールド / Cキー)</button>
+  <button id="btnBlip">ブリッピング煽り (Spaceキー)</button>
+  <button id="btnShiftUp">シフトアップ (+1 / ↑キー)</button>
+  <button id="btnShiftDown">シフトダウン (-1 / ↓キー)</button>
+</div>
+
+<div class="info">
+  <strong>検証の使い方：</strong><br>
+  1. 「エンジン始動」を押すとPCスピーカーから928GTのV8爆発周波数（RPM ÷ 15 Hz）の合成音が鳴ります。<br>
+  2. スマホの <code>index.html</code> で「マイク＆センサー開始」を押し、スマホの検証用スライダーを上の <strong>VIRTUAL SPEED</strong> に合わせてください（同じPCの別タブなら速度・加速度は自動同期されます）。<br>
+  3. 「自動シフトダウン模擬テスト」を押すか、手動で「クラッチ踏む → ブリッピング煽り → シフトダウン → クラッチ離す」を操作すると、スマホ側がターゲット回転数到達とシフトショック（ジャーク）を判定します。
+</div>
+
+<script>
+const RATIOS = [87.07, 58.20, 42.26, 31.87, 23.09];
+let speedKmh = 80;
+let gear = 4;
+let rpm = 2550;
+let clutchPressed = false;
+let throttle = 0.25;
+let brake = 0;
+let prevSpeedMs = speedKmh / 3.6;
+
+// Web Audio V8 Synth
+let audioCtx, oscPrimary, oscSub, oscHarmonic, filterNode, masterGain;
+let isAudioRunning = false;
+
+const simChannel = new BroadcastChannel('928gt_sim_bus');
+
+document.getElementById('btnAudio').addEventListener('click', (e) => {
+  if (isAudioRunning) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // クロスプレーンV8の爆発音合成（基本波 + 0.5次ビート + 2次倍音）
+  oscPrimary = audioCtx.createOscillator();
+  oscSub = audioCtx.createOscillator();
+  oscHarmonic = audioCtx.createOscillator();
+
+  oscPrimary.type = 'sawtooth';
+  oscSub.type = 'triangle';
+  oscHarmonic.type = 'square';
+
+  filterNode = audioCtx.createBiquadFilter();
+  filterNode.type = 'lowpass';
+  filterNode.frequency.value = 350;
+
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.25;
+
+  const subGain = audioCtx.createGain();
+  subGain.gain.value = 0.4;
+  const harmGain = audioCtx.createGain();
+  harmGain.gain.value = 0.15;
+
+  oscPrimary.connect(filterNode);
+  oscSub.connect(subGain).connect(filterNode);
+  oscHarmonic.connect(harmGain).connect(filterNode);
+
+  filterNode.connect(masterGain).connect(audioCtx.destination);
+
+  oscPrimary.start();
+  oscSub.start();
+  oscHarmonic.start();
+
+  isAudioRunning = true;
+  e.target.textContent = 'エンジン稼働中 (V8 SOUND ON)';
+  e.target.classList.add('active');
+});
+
+// UI操作バインド
+const throttleEl = document.getElementById('throttle');
+const brakeEl = document.getElementById('brake');
+throttleEl.addEventListener('input', () => {
+  throttle = throttleEl.value / 100;
+  document.getElementById('valThrottle').textContent = `${throttleEl.value}%`;
+});
+brakeEl.addEventListener('input', () => {
+  brake = brakeEl.value / 100;
+  document.getElementById('valBrake').textContent = `${brakeEl.value}%`;
+});
+
+const btnClutch = document.getElementById('btnClutch');
+btnClutch.addEventListener('mousedown', () => setClutch(true));
+btnClutch.addEventListener('mouseup', () => setClutch(false));
+btnClutch.addEventListener('touchstart', (e) => { e.preventDefault(); setClutch(true); });
+btnClutch.addEventListener('touchend', () => setClutch(false));
+
+const btnBlip = document.getElementById('btnBlip');
+btnBlip.addEventListener('mousedown', () => setThrottle(0.85));
+btnBlip.addEventListener('mouseup', () => setThrottle(0.0));
+btnBlip.addEventListener('touchstart', (e) => { e.preventDefault(); setThrottle(0.85); });
+btnBlip.addEventListener('touchend', () => setThrottle(0.0));
+
+document.getElementById('btnShiftUp').addEventListener('click', () => {
+  if (gear < 5) gear++;
+});
+document.getElementById('btnShiftDown').addEventListener('click', () => {
+  if (gear > 1) gear--;
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyC') setClutch(true);
+  if (e.code === 'Space') { e.preventDefault(); setThrottle(0.85); }
+  if (e.code === 'ArrowUp' && gear < 5) gear++;
+  if (e.code === 'ArrowDown' && gear > 1) gear--;
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyC') setClutch(false);
+  if (e.code === 'Space') setThrottle(0.0);
+});
+
+function setClutch(state) {
+  clutchPressed = state;
+  btnClutch.classList.toggle('active', state);
+}
+function setThrottle(val) {
+  throttle = val;
+  throttleEl.value = Math.round(val * 100);
+  document.getElementById('valThrottle').textContent = `${throttleEl.value}%`;
+}
+
+// 自動ヒール＆トゥ模擬シナリオ
+let scenarioRunning = false;
+document.getElementById('btnScenario').addEventListener('click', async (e) => {
+  if (scenarioRunning) return;
+  scenarioRunning = true;
+  e.target.classList.add('active');
+
+  // 初期状態: 4速 85km/h
+  speedKmh = 85;
+  gear = 4;
+  setClutch(false);
+  setThrottle(0.3);
+  brake = 0; brakeEl.value = 0;
+
+  await sleep(1500);
+  // ブレーキング開始
+  setThrottle(0);
+  brake = 0.5; brakeEl.value = 50;
+  await sleep(1200);
+
+  // クラッチ切る & 3速へダウンシフト
+  setClutch(true);
+  gear = 3;
+  await sleep(250);
+
+  // ブリッピング（アクセル煽り）
+  setThrottle(0.75);
+  await sleep(320);
+  setThrottle(0);
+  await sleep(150);
+
+  // クラッチミート！
+  setClutch(false);
+  brake = 0; brakeEl.value = 0;
+  await sleep(2000);
+
+  scenarioRunning = false;
+  e.target.classList.remove('active');
+});
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// === 物理演算ループ (50Hz) ===
+setInterval(() => {
+  const dt = 0.02;
+
+  if (clutchPressed) {
+    // クラッチ切断中：フライホイール単体の吹け上がりと回転落ち
+    const targetFreeRpm = 800 + throttle * 6200;
+    const rate = throttle > 0.05 ? 9.0 : 3.2; // 煽る時は速く、抜くと少しゆっくり落ちる
+    rpm += (targetFreeRpm - rpm) * rate * dt;
+
+    // 車速は走行抵抗とブレーキのみで減速
+    const decel = 0.4 + brake * 7.5;
+    speedKmh = Math.max(0, speedKmh - decel * 3.6 * dt);
+  } else {
+    // クラッチ接続中：ギア比で車速と回転数が直結
+    const ratio = RATIOS[gear - 1];
+    const wheelTargetRpm = speedKmh * ratio;
+
+    // 回転数が合っていない状態で繋ぐとショック（急激な加減速）が発生
+    const rpmDiff = rpm - wheelTargetRpm;
+    speedKmh += (rpmDiff / ratio) * 0.25; // クラッチミートショック
+    rpm = speedKmh * ratio;
+
+    // 駆動力とエンジンブレーキ・ブレーキ
+    const driveForce = throttle * (6 - gear) * 1.4;
+    const engBrake = (1 - throttle) * (rpm / 6000) * 2.2;
+    const brakeForce = brake * 8.0;
+    const accelMs2 = driveForce - engBrake - brakeForce;
+
+    speedKmh = Math.max(15, Math.min(250, speedKmh + accelMs2 * 3.6 * dt));
+    rpm = Math.max(850, Math.min(6800, speedKmh * ratio));
+  }
+
+  // 加速度算出とBroadcastChannel送信
+  const currentSpeedMs = speedKmh / 3.6;
+  const accelMs2 = (currentSpeedMs - prevSpeedMs) / dt;
+  prevSpeedMs = currentSpeedMs;
+
+  simChannel.postMessage({
+    type: 'TELEMETRY',
+    speedKmh,
+    accelMs2
+  });
+
+  // サウンド周波数更新 (V8: RPM / 15 Hz)
+  const primaryHz = rpm / 15;
+  if (isAudioRunning) {
+    const now = audioCtx.currentTime;
+    oscPrimary.frequency.setTargetAtTime(primaryHz, now, 0.02);
+    oscSub.frequency.setTargetAtTime(primaryHz * 0.5, now, 0.02);
+    oscHarmonic.frequency.setTargetAtTime(primaryHz * 2.0, now, 0.02);
+    // スロットル開度でフィルターを開閉して吸排気音を演出
+    filterNode.frequency.setTargetAtTime(200 + throttle * 900 + (rpm / 6800) * 400, now, 0.03);
+  }
+
+  // 画面表示更新
+  document.getElementById('simSpeed').textContent = Math.round(speedKmh);
+  document.getElementById('simGear').textContent = gear;
+  document.getElementById('simClutch').textContent = clutchPressed ? 'CLUTCH OPEN' : 'ENGAGED';
+  document.getElementById('simClutch').style.color = clutchPressed ? '#ff3d00' : '#00e676';
+  document.getElementById('simRpm').textContent = Math.round(rpm);
+  document.getElementById('simHz').textContent = `${primaryHz.toFixed(1)} Hz`;
+}, 20);
+</script>
+</body>
+</html>

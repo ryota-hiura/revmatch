@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>928GT Rev-Match & Jerk Telemetry</title>
+<style>
+  :root {
+    --bg: #0a0a0c;
+    --panel: #141418;
+    --border: #2a2a32;
+    --amber: #ff9e00;
+    --amber-dim: #7a4b00;
+    --green: #00e676;
+    --red: #ff3d00;
+    --cyan: #00b0ff;
+    --text: #f0f0f5;
+    --text-dim: #888895;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, monospace; }
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    padding: 12px;
+    max-width: 600px;
+    margin: 0 auto;
+    user-select: none;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .title { font-size: 1rem; font-weight: 700; color: var(--amber); letter-spacing: 1px; }
+  select, button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }
+  button.primary {
+    background: var(--amber);
+    color: #000;
+    font-weight: 700;
+    border: none;
+  }
+  button.active {
+    background: var(--green);
+    color: #000;
+    font-weight: 700;
+    border: none;
+  }
+  .controls-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .controls-bar button { flex: 1; padding: 10px; font-size: 0.9rem; cursor: pointer; }
+
+  /* メインメーターパネル */
+  .dashboard {
+    display: grid;
+    grid-template-columns: 1fr 1.2fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    text-align: center;
+  }
+  .card-label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+  .card-val { font-size: 1.8rem; font-weight: 800; color: var(--amber); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .card-unit { font-size: 0.75rem; color: var(--text-dim); }
+
+  .gear-card { border-color: var(--amber-dim); }
+  .gear-val { font-size: 2.8rem; line-height: 1; color: var(--text); }
+  .gear-status { font-size: 0.7rem; margin-top: 4px; color: var(--cyan); font-weight: bold; }
+
+  /* ターゲット・レブゲージ */
+  .gauge-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .gauge-header { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 6px; }
+  .gauge-track {
+    position: relative;
+    height: 28px;
+    background: #050507;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .gauge-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--amber);
+    transition: width 0.05s linear, background-color 0.1s;
+  }
+  .gauge-marker {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    transform: translateX(-50%);
+    display: none;
+  }
+  .gauge-marker.step2 {
+    background: var(--cyan);
+    box-shadow: 0 0 6px var(--cyan);
+    width: 2px;
+  }
+
+  /* シフトダウン目標カード */
+  .targets {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .target-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  .target-card.step1 { border-left: 4px solid var(--green); }
+  .target-card.step2 { border-left: 4px solid var(--cyan); }
+  .target-title { font-size: 0.75rem; color: var(--text-dim); }
+  .target-rpm { font-size: 1.6rem; font-weight: 800; margin: 4px 0; font-variant-numeric: tabular-nums; }
+  .target-delta { font-size: 0.95rem; font-weight: 700; color: var(--green); }
+  .step2 .target-delta { color: var(--cyan); }
+  .overrev { color: var(--red) !important; }
+
+  /* 検証用GPSフックパネル */
+  details {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 12px;
+    font-size: 0.85rem;
+  }
+  summary { font-weight: 700; color: var(--cyan); cursor: pointer; }
+  .sim-controls { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .slider-row { display: flex; align-items: center; gap: 10px; }
+  .slider-row input[type="range"] { flex: 1; }
+
+  /* ログ＆AI出力 */
+  .log-section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+  }
+  .log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .log-list {
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .log-item {
+    background: #0d0d10;
+    padding: 8px;
+    border-radius: 6px;
+    border-left: 3px solid var(--amber);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .score-badge {
+    font-weight: 800;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--amber);
+    color: #000;
+  }
+  .debug-bar { font-size: 0.7rem; color: var(--text-dim); margin-top: 8px; text-align: right; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">REV-MATCH ASSIST</div>
+  <select id="carProfile">
+    <option value="928gt">91 Porsche 928 GT (5MT/V8)</option>
+    <option value="nd5rc">Mazda Roadster ND (6MT/L4)</option>
+  </select>
+</header>
+
+<div class="controls-bar">
+  <button id="btnStart" class="primary">マイク & センサー開始</button>
+  <button id="btnBeep">ガイド音: ON</button>
+</div>
+
+<div class="dashboard">
+  <div class="card">
+    <div class="card-label">SPEED</div>
+    <div class="card-val" id="dispSpeed">0</div>
+    <div class="card-unit" id="speedSource">km/h (GPS)</div>
+  </div>
+  <div class="card gear-card">
+    <div class="card-label">GEAR</div>
+    <div class="card-val gear-val" id="dispGear">-</div>
+    <div class="gear-status" id="dispGearStatus">STANDBY</div>
+  </div>
+  <div class="card">
+    <div class="card-label">ENGINE</div>
+    <div class="card-val" id="dispRpm">0</div>
+    <div class="card-unit">rpm (FFT)</div>
+  </div>
+</div>
+
+<div class="gauge-box">
+  <div class="gauge-header">
+    <span>TARGET REV MATCH GAUGE</span>
+    <span id="dispJerk">Jerk: 0.0 m/s³</span>
+  </div>
+  <div class="gauge-track">
+    <div class="gauge-fill" id="gaugeFill"></div>
+    <div class="gauge-marker" id="markerStep1" title="1-Step Down"></div>
+    <div class="gauge-marker step2" id="markerStep2" title="2-Step Down"></div>
+  </div>
+</div>
+
+<div class="targets">
+  <div class="target-card step1">
+    <div class="target-title" id="labelStep1">1-STEP DOWN (-1)</div>
+    <div class="target-rpm" id="rpmStep1">----</div>
+    <div class="target-delta" id="deltaStep1">+0 rpm</div>
+  </div>
+  <div class="target-card step2">
+    <div class="target-title" id="labelStep2">2-STEP DOWN (-2)</div>
+    <div class="target-rpm" id="rpmStep2">----</div>
+    <div class="target-delta" id="deltaStep2">+0 rpm</div>
+  </div>
+</div>
+
+<details open>
+  <summary>検証用：GPS速度フック＆テストベンチ連携</summary>
+  <div class="sim-controls">
+    <label><input type="checkbox" id="chkSimSpeed"> 仮想GPS速度で上書きする（机上テスト用）</label>
+    <div class="slider-row">
+      <span>仮想車速:</span>
+      <input type="range" id="sliderSpeed" min="0" max="160" value="75">
+      <span id="valSliderSpeed" style="width:65px; text-align:right;">75 km/h</span>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button id="btnAutoDecel" style="flex:1;">自動減速ループ (90→40km/h)</button>
+      <button id="btnResetLog">ログ消去</button>
+    </div>
+    <div style="font-size:0.75rem; color:var(--text-dim);">
+      ※同ブラウザ別タブで simulator.html を開くと速度・加速度が自動同期されます。
+    </div>
+  </div>
+</details>
+
+<div class="log-section">
+  <div class="log-header">
+    <span style="font-size:0.85rem; font-weight:700;">SHIFT DOWN TELEMETRY LOG</span>
+    <button id="btnCopyAi" class="primary" style="font-size:0.75rem; padding:4px 8px;">AIコーチ用JSONコピー</button>
+  </div>
+  <div class="log-list" id="logList">
+    <div style="color:var(--text-dim); text-align:center; padding:12px;">シフトダウン完了時に精度とジャークを自動記録します</div>
+  </div>
+</div>
+
+<div class="debug-bar" id="debugInfo">FFT Peak: -- Hz | Ratio: --</div>
+
+<script>
+// === 車種プロファイル定義 ===
+const PROFILES = {
+  "928gt": {
+    name: "1991 Porsche 928 GT (5.0L V8 / 5MT)",
+    cylinders: 8, // 4スト8気筒 = 1回転4爆発 -> RPM = Hz * 15
+    redline: 6800,
+    // 1〜5速の RPM / (km/h) 比率（ファイナル2.73, 245/45ZR16基準）
+    gearRatios: [87.07, 58.20, 42.26, 31.87, 23.09]
+  },
+  "nd5rc": {
+    name: "Mazda Roadster ND (1.5L L4 / 6MT)",
+    cylinders: 4, // 4スト4気筒 = 1回転2爆発 -> RPM = Hz * 30
+    redline: 7500,
+    gearRatios: [115.2, 69.5, 48.8, 37.6, 29.8, 24.5]
+  }
+};
+
+let currentProfile = PROFILES["928gt"];
+let isRunning = false;
+let beepEnabled = true;
+
+// Audio / FFT
+let audioCtx, analyser, freqData;
+let smoothedRpm = 0;
+
+// Speed / IMU / Jerk
+let gpsSpeedKmh = 0;
+let currentSpeedKmh = 0;
+let currentAccel = 0;
+let prevAccel = 0;
+let prevAccelTime = performance.now();
+let currentJerk = 0;
+let recentJerks = []; // 直近のジャーク履歴
+
+// Gear & Shift State Machine
+let engagedGear = null;     // 現在噛み合っているギア (1..N)
+let referenceGear = null;   // 直前まで入っていた基準ギア（クラッチ切断中も保持）
+let gearStableFrames = 0;
+let candidateGear = null;
+let isClutchOpen = false;
+let peakRpmDuringClutch = 0;
+let targetHitTriggered = false;
+
+// Telemetry Logs
+let shiftLogs = [];
+
+// BroadcastChannel (simulator.html との連携用)
+const simChannel = new BroadcastChannel('928gt_sim_bus');
+simChannel.onmessage = (e) => {
+  if (e.data && e.data.type === 'TELEMETRY') {
+    document.getElementById('chkSimSpeed').checked = true;
+    document.getElementById('sliderSpeed').value = Math.round(e.data.speedKmh);
+    document.getElementById('valSliderSpeed').textContent = `${Math.round(e.data.speedKmh)} km/h`;
+    updateAccelAndJerk(e.data.accelMs2);
+  }
+};
+
+// === UIイベント ===
+document.getElementById('carProfile').addEventListener('change', (e) => {
+  currentProfile = PROFILES[e.target.value];
+  engagedGear = null;
+  referenceGear = null;
+});
+
+document.getElementById('btnBeep').addEventListener('click', (e) => {
+  beepEnabled = !beepEnabled;
+  e.target.textContent = `ガイド音: ${beepEnabled ? 'ON' : 'OFF'}`;
+});
+
+document.getElementById('sliderSpeed').addEventListener('input', (e) => {
+  document.getElementById('valSliderSpeed').textContent = `${e.target.value} km/h`;
+});
+
+let autoDecelTimer = null;
+document.getElementById('btnAutoDecel').addEventListener('click', (e) => {
+  if (autoDecelTimer) {
+    clearInterval(autoDecelTimer);
+    autoDecelTimer = null;
+    e.target.classList.remove('active');
+    return;
+  }
+  document.getElementById('chkSimSpeed').checked = true;
+  e.target.classList.add('active');
+  let simV = 95;
+  autoDecelTimer = setInterval(() => {
+    simV -= 0.4; // 約 -1.1 m/s^2 の穏やかなブレーキング
+    if (simV < 35) simV = 95;
+    document.getElementById('sliderSpeed').value = Math.round(simV);
+    document.getElementById('valSliderSpeed').textContent = `${Math.round(simV)} km/h`;
+    updateAccelAndJerk(-1.1);
+  }, 100);
+});
+
+document.getElementById('btnResetLog').addEventListener('click', () => {
+  shiftLogs = [];
+  renderLogs();
+});
+
+document.getElementById('btnCopyAi').addEventListener('click', () => {
+  const promptText = `以下は私の愛車（${currentProfile.name}）でのMTシフトダウン（ヒール＆トゥ／回転合わせ）のテレメトリログです。
+回転数誤差（rpmError）とシフトショックの指標である躍度（maxJerkMs3）の相関を分析し、専属レーシングエンジニアの視点でドライビングの癖と改善アドバイスをください。
+
+${JSON.stringify(shiftLogs, null, 2)}`;
+  navigator.clipboard.writeText(promptText).then(() => {
+    alert('AIコーチ用の分析プロンプト＆ログJSONをクリップボードにコピーしました！');
+  });
+});
+
+// === センサー＆マイク初期化 ===
+document.getElementById('btnStart').addEventListener('click', async () => {
+  if (isRunning) return;
+  try {
+    // 1. マイク初期化（ノイズ抑制やAGCをOFFにして生のエンジン音を拾う）
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 8192;
+    analyser.smoothingTimeConstant = 0.5;
+    source.connect(analyser);
+    freqData = new Float32Array(analyser.frequencyBinCount);
+
+    // 2. GPS初期化
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition((pos) => {
+        if (pos.coords.speed !== null && !isNaN(pos.coords.speed)) {
+          gpsSpeedKmh = pos.coords.speed * 3.6;
+        }
+      }, (err) => console.warn('GPS:', err), {
+        enableHighAccuracy: true,
+        maximumAge: 0
+      });
+    }
+
+    // 3. 加速度センサー（iOS 13+ 許可対応）
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const perm = await DeviceMotionEvent.requestPermission();
+      if (perm === 'granted') {
+        window.addEventListener('devicemotion', handleDeviceMotion);
+      }
+    } else {
+      window.addEventListener('devicemotion', handleDeviceMotion);
+    }
+
+    isRunning = true;
+    const btn = document.getElementById('btnStart');
+    btn.textContent = '計測中 (ACTIVE)';
+    btn.classList.add('active');
+    requestAnimationFrame(mainLoop);
+  } catch (err) {
+    alert('マイクの起動に失敗しました。HTTPS環境でアクセスしているか確認してください。\n' + err.message);
+  }
+});
+
+function handleDeviceMotion(e) {
+  if (document.getElementById('chkSimSpeed').checked) return;
+  const acc = e.acceleration; // 重力除去済み加速度
+  if (!acc) return;
+  // スマホ縦置き想定（Y軸またはZ軸の合成前後G）
+  const longitudinal = Math.hypot(acc.y || 0, acc.z || 0) * Math.sign((acc.y || 0) + (acc.z || 0));
+  updateAccelAndJerk(longitudinal);
+}
+
+function updateAccelAndJerk(accelMs2) {
+  const now = performance.now();
+  const dt = (now - prevAccelTime) / 1000;
+  if (dt > 0.01) {
+    currentJerk = Math.abs((accelMs2 - prevAccel) / dt);
+    recentJerks.push({ t: now, jerk: currentJerk });
+    recentJerks = recentJerks.filter(item => now - item.t < 600);
+  }
+  prevAccel = accelMs2;
+  prevAccelTime = now;
+  currentAccel = accelMs2;
+}
+
+// === ガイド音（ターゲット到達時の短いビープ） ===
+function playTargetBeep() {
+  if (!beepEnabled || !audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(980, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.06);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.06);
+}
+
+// === FFTピーク検出（放物線補間＋倍音トラッキング） ===
+function detectEngineRpm() {
+  analyser.getFloatFrequencyData(freqData);
+  const sampleRate = audioCtx.sampleRate;
+  const binWidth = sampleRate / analyser.fftSize;
+
+  // 爆発係数: 4ストローク気筒数 / 2 回転 -> Hz = RPM * (cyl / 120) -> RPM = Hz * (120 / cyl)
+  const hzToRpm = 120 / currentProfile.cylinders;
+  const minHz = 600 / hzToRpm;
+  const maxHz = (currentProfile.redline + 500) / hzToRpm;
+
+  const minBin = Math.max(2, Math.floor(minHz / binWidth));
+  const maxBin = Math.min(freqData.length - 2, Math.ceil(maxHz / binWidth));
+
+  let bestBin = -1;
+  let bestScore = -Infinity;
+
+  for (let i = minBin; i <= maxBin; i++) {
+    const db = freqData[i];
+    if (db < -75) continue; // ノイズフロア以下は無視
+
+    const candRpm = i * binWidth * hzToRpm;
+    let score = db;
+
+    // 前フレームのRPMがある場合は連続性を優遇（オクターブ飛び防止）
+    if (smoothedRpm > 700) {
+      const diffRatio = Math.abs(candRpm - smoothedRpm) / smoothedRpm;
+      if (diffRatio < 0.25) {
+        score += 12 * (1 - diffRatio / 0.25);
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestBin = i;
+    }
+  }
+
+  if (bestBin === -1) {
+    smoothedRpm *= 0.92;
+    return { rpm: Math.round(smoothedRpm), hz: 0 };
+  }
+
+  // 放物線補間（Parabolic Interpolation）でサブビン精度を算出
+  const alpha = freqData[bestBin - 1];
+  const beta = freqData[bestBin];
+  const gamma = freqData[bestBin + 1];
+  const denom = (alpha - 2 * beta + gamma);
+  const p = denom !== 0 ? 0.5 * (alpha - gamma) / denom : 0;
+  const exactHz = (bestBin + p) * binWidth;
+  const rawRpm = exactHz * hzToRpm;
+
+  smoothedRpm = smoothedRpm === 0 ? rawRpm : smoothedRpm * 0.65 + rawRpm * 0.35;
+  return { rpm: Math.round(smoothedRpm), hz: exactHz.toFixed(1) };
+}
+
+// === メインループ ===
+function mainLoop() {
+  if (!isRunning) return;
+
+  // 1. 車速取得（テストモード優先、実車時はGPS）
+  const useSim = document.getElementById('chkSimSpeed').checked;
+  if (useSim) {
+    currentSpeedKmh = parseFloat(document.getElementById('sliderSpeed').value);
+    document.getElementById('speedSource').textContent = 'km/h (SIM)';
+  } else {
+    currentSpeedKmh = gpsSpeedKmh;
+    document.getElementById('speedSource').textContent = 'km/h (GPS)';
+  }
+
+  // 2. エンジン回転数取得
+  const { rpm, hz } = detectEngineRpm();
+
+  // 3. ギアポジション推定ステートマシン
+  const ratios = currentProfile.gearRatios;
+  let currentRatio = currentSpeedKmh >= 10 ? (rpm / currentSpeedKmh) : 0;
+  let matchedGear = null;
+
+  if (currentSpeedKmh >= 10 && rpm >= 800) {
+    let minErr = Infinity;
+    ratios.forEach((r, idx) => {
+      const err = Math.abs(currentRatio - r) / r;
+      if (err < minErr) {
+        minErr = err;
+        if (err < 0.065) { // 誤差6.5%以内ならギア噛み合いとみなす
+          matchedGear = idx + 1;
+        }
+      }
+    });
+  }
+
+  if (matchedGear !== null) {
+    // 同じギア判定が数フレーム続いたら確定
+    if (candidateGear === matchedGear) {
+      gearStableFrames++;
+    } else {
+      candidateGear = matchedGear;
+      gearStableFrames = 1;
+    }
+
+    if (gearStableFrames >= 4) {
+      // クラッチ切断状態からの復帰（シフト完了）チェック
+      if (isClutchOpen && referenceGear !== null && matchedGear < referenceGear) {
+        recordShiftDownEvent(referenceGear, matchedGear, currentSpeedKmh, rpm);
+      }
+      engagedGear = matchedGear;
+      referenceGear = matchedGear;
+      isClutchOpen = false;
+      peakRpmDuringClutch = 0;
+      targetHitTriggered = false;
+    }
+  } else {
+    // 比率が外れた＝クラッチ切断またはニュートラル
+    if (currentSpeedKmh >= 10 && engagedGear !== null) {
+      isClutchOpen = true;
+      if (rpm > peakRpmDuringClutch) peakRpmDuringClutch = rpm;
+    }
+    engagedGear = null;
+    gearStableFrames = 0;
+  }
+
+  // 4. 目標回転数（1段落とし・2段落とし）の計算
+  const activeGear = referenceGear;
+  let t1Rpm = null, t2Rpm = null;
+
+  if (activeGear && currentSpeedKmh >= 10) {
+    if (activeGear - 1 >= 1) {
+      t1Rpm = Math.round(currentSpeedKmh * ratios[activeGear - 2]);
+    }
+    if (activeGear - 2 >= 1) {
+      t2Rpm = Math.round(currentSpeedKmh * ratios[activeGear - 3]);
+    }
+  }
+
+  // 5. UI更新
+  updateUI(rpm, hz, currentRatio, t1Rpm, t2Rpm);
+
+  requestAnimationFrame(mainLoop);
+}
+
+function updateUI(rpm, hz, ratio, t1Rpm, t2Rpm) {
+  document.getElementById('dispSpeed').textContent = Math.round(currentSpeedKmh);
+  document.getElementById('dispRpm').textContent = rpm;
+  document.getElementById('dispJerk').textContent = `Jerk: ${currentJerk.toFixed(1)} m/s³`;
+  document.getElementById('debugInfo').textContent = `FFT Peak: ${hz} Hz | N/V Ratio: ${ratio.toFixed(2)}`;
+
+  const gearEl = document.getElementById('dispGear');
+  const statusEl = document.getElementById('dispGearStatus');
+
+  if (engagedGear) {
+    gearEl.textContent = engagedGear;
+    gearEl.style.color = 'var(--text)';
+    statusEl.textContent = 'ENGAGED';
+    statusEl.style.color = 'var(--green)';
+  } else if (isClutchOpen && referenceGear) {
+    gearEl.textContent = `${referenceGear}→?`;
+    gearEl.style.color = 'var(--amber)';
+    statusEl.textContent = 'CLUTCH / BLIPPING';
+    statusEl.style.color = 'var(--amber)';
+  } else {
+    gearEl.textContent = 'N';
+    gearEl.style.color = 'var(--text-dim)';
+    statusEl.textContent = currentSpeedKmh < 10 ? 'LOW SPEED' : 'NEUTRAL';
+    statusEl.style.color = 'var(--text-dim)';
+  }
+
+  // レブゲージとマーカー
+  const redline = currentProfile.redline;
+  const pct = Math.min(100, Math.max(0, (rpm / redline) * 100));
+  const fillEl = document.getElementById('gaugeFill');
+  fillEl.style.width = `${pct}%`;
+
+  const m1 = document.getElementById('markerStep1');
+  const m2 = document.getElementById('markerStep2');
+
+  if (t1Rpm && t1Rpm <= redline) {
+    m1.style.display = 'block';
+    m1.style.left = `${(t1Rpm / redline) * 100}%`;
+  } else {
+    m1.style.display = 'none';
+  }
+
+  if (t2Rpm && t2Rpm <= redline) {
+    m2.style.display = 'block';
+    m2.style.left = `${(t2Rpm / redline) * 100}%`;
+  } else {
+    m2.style.display = 'none';
+  }
+
+  // ターゲット回転数マッチング判定（±120rpm）
+  if (isClutchOpen && t1Rpm && Math.abs(rpm - t1Rpm) <= 120) {
+    fillEl.style.backgroundColor = 'var(--green)';
+    if (!targetHitTriggered) {
+      playTargetBeep();
+      targetHitTriggered = true;
+    }
+  } else if (rpm >= redline - 300) {
+    fillEl.style.backgroundColor = 'var(--red)';
+  } else {
+    fillEl.style.backgroundColor = 'var(--amber)';
+    if (t1Rpm && Math.abs(rpm - t1Rpm) > 250) {
+      targetHitTriggered = false;
+    }
+  }
+
+  // 1段・2段目標カード更新
+  updateTargetCard(1, referenceGear ? referenceGear - 1 : null, t1Rpm, rpm);
+  updateTargetCard(2, referenceGear ? referenceGear - 2 : null, t2Rpm, rpm);
+}
+
+function updateTargetCard(stepNum, targetGear, targetRpm, currentRpm) {
+  const labelEl = document.getElementById(`labelStep${stepNum}`);
+  const rpmEl = document.getElementById(`rpmStep${stepNum}`);
+  const deltaEl = document.getElementById(`deltaStep${stepNum}`);
+
+  if (!targetGear || targetGear < 1 || !targetRpm) {
+    labelEl.textContent = `${stepNum}-STEP DOWN`;
+    rpmEl.textContent = '----';
+    rpmEl.classList.remove('overrev');
+    deltaEl.textContent = '--';
+    return;
+  }
+
+  labelEl.textContent = `${stepNum}-STEP → ${targetGear}速`;
+  if (targetRpm > currentProfile.redline) {
+    rpmEl.textContent = `${targetRpm}`;
+    rpmEl.classList.add('overrev');
+    deltaEl.textContent = 'OVER REV!';
+    deltaEl.classList.add('overrev');
+  } else {
+    rpmEl.textContent = `${targetRpm}`;
+    rpmEl.classList.remove('overrev');
+    deltaEl.classList.remove('overrev');
+    const diff = targetRpm - currentRpm;
+    deltaEl.textContent = diff >= 0 ? `+${diff} rpm` : `${diff} rpm`;
+  }
+}
+
+function recordShiftDownEvent(fromGear, toGear, speedKmh, engagedRpm) {
+  const idealRpm = Math.round(speedKmh * currentProfile.gearRatios[toGear - 1]);
+  // クラッチ切断中のピーク回転数（ブリッピング到達点）と理想回転数の差
+  const blipRpm = peakRpmDuringClutch > 0 ? peakRpmDuringClutch : engagedRpm;
+  const rpmError = blipRpm - idealRpm;
+  const maxJerk = recentJerks.length > 0 ? Math.max(...recentJerks.map(j => j.jerk)) : 0;
+
+  // スコア計算（100点満点から回転数ズレとジャークを減点）
+  const score = Math.max(0, Math.min(100, Math.round(100 - Math.abs(rpmError) * 0.06 - maxJerk * 2.0)));
+
+  shiftLogs.unshift({
+    timestamp: new Date().toLocaleTimeString(),
+    shift: `${fromGear} -> ${toGear}`,
+    speedKmh: Math.round(speedKmh),
+    idealRpm,
+    actualBlipRpm: blipRpm,
+    rpmError,
+    maxJerkMs3: Number(maxJerk.toFixed(2)),
+    score
+  });
+
+  renderLogs();
+}
+
+function renderLogs() {
+  const list = document.getElementById('logList');
+  if (shiftLogs.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-dim); text-align:center; padding:12px;">シフトダウン完了時に精度とジャークを自動記録します</div>';
+    return;
+  }
+  list.innerHTML = shiftLogs.map(log => `
+    <div class="log-item">
+      <div>
+        <strong>${log.shift}速</strong> (${log.speedKmh}km/h)
+        <span style="color:var(--text-dim); margin-left:6px;">誤差: ${log.rpmError >= 0 ? '+' : ''}${log.rpmError}rpm / Jerk: ${log.maxJerkMs3}</span>
+      </div>
+      <div class="score-badge">${log.score}点</div>
+    </div>
+  `).join('');
+}
+</script>
+</body>
+</html>
