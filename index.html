@@ -211,7 +211,7 @@
   </div>
 </details>
 
-<div class="debug-bar" id="debugInfo">FFT Peak: -- Hz | Ratio: --</div>
+<div class="debug-bar" id="debugInfo">Ignition: -- Hz | N/V Ratio: --</div>
 
 <script>
 // === 車種プロファイル定義 ===
@@ -552,7 +552,7 @@ function mainLoop() {
 function updateUI(rpm, hz, ratio, t1Rpm, t2Rpm) {
   document.getElementById('dispSpeed').textContent = Math.round(currentSpeedKmh);
   document.getElementById('dispRpm').textContent = `${rpm.toLocaleString('ja-JP')} RPM`;
-  document.getElementById('debugInfo').textContent = `FFT Peak: ${hz} Hz | N/V Ratio: ${ratio.toFixed(2)}`;
+  document.getElementById('debugInfo').textContent = `Ignition: ${hz} Hz | N/V Ratio: ${ratio.toFixed(2)}`;
   setNeedle('speedNeedle', currentSpeedKmh, MAX_SPEED_KMH);
   setNeedle('tachNeedle', rpm, MAX_RPM);
   updateTargetMarker('targetStep1', t1Rpm, 1);
