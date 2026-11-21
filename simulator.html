@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>928GT Virtual Test Bench & V8 Sound Synth</title>
+<title>928GT Rev-Match Test Bench & V8 Sound Synth</title>
 <style>
   * { box-sizing: border-box; font-family: 'Segoe UI', monospace; }
   body {
@@ -38,7 +38,7 @@
 </head>
 <body>
 
-<h1>928GT VIRTUAL TEST BENCH (V8 SOUND & TELEMETRY)</h1>
+<h1>928GT REV-MATCH TEST BENCH (V8 SOUND)</h1>
 
 <div style="display:flex; gap:10px; margin-bottom:12px;">
   <button id="btnAudio" class="primary" style="flex:1;">1. エンジン始動（V8サウンドON）</button>
@@ -86,8 +86,8 @@
 <div class="info">
   <strong>検証の使い方：</strong><br>
   1. 「エンジン始動」を押すとPCスピーカーから928GTのV8爆発周波数（RPM ÷ 15 Hz）の合成音が鳴ります。<br>
-  2. スマホの <code>index.html</code> で「マイク＆センサー開始」を押し、スマホの検証用スライダーを上の <strong>VIRTUAL SPEED</strong> に合わせてください（同じPCの別タブなら速度・加速度は自動同期されます）。<br>
-  3. 「自動シフトダウン模擬テスト」を押すか、手動で「クラッチ踏む → ブリッピング煽り → シフトダウン → クラッチ離す」を操作すると、スマホ側がターゲット回転数到達とシフトショック（ジャーク）を判定します。
+  2. スマホの <code>index.html</code> で「マイク＆GPS計測開始」を押すと、同じブラウザの別タブ間で仮想速度が自動同期されます。<br>
+  3. 「自動シフトダウン模擬テスト」を押すか、手動で「クラッチ踏む → ブリッピング煽り → シフトダウン → クラッチ離す」を操作すると、スマホ側のメーターで目標回転数との一致を確認できます。
 </div>
 
 <script>
@@ -98,7 +98,6 @@ let rpm = 2550;
 let clutchPressed = false;
 let throttle = 0.25;
 let brake = 0;
-let prevSpeedMs = speedKmh / 3.6;
 
 // Web Audio V8 Synth
 let audioCtx, oscPrimary, oscSub, oscHarmonic, filterNode, masterGain;
@@ -273,15 +272,9 @@ setInterval(() => {
     rpm = Math.max(850, Math.min(6800, speedKmh * ratio));
   }
 
-  // 加速度算出とBroadcastChannel送信
-  const currentSpeedMs = speedKmh / 3.6;
-  const accelMs2 = (currentSpeedMs - prevSpeedMs) / dt;
-  prevSpeedMs = currentSpeedMs;
-
   simChannel.postMessage({
-    type: 'TELEMETRY',
-    speedKmh,
-    accelMs2
+    type: 'SIM_SPEED',
+    speedKmh
   });
 
   // サウンド周波数更新 (V8: RPM / 15 Hz)
