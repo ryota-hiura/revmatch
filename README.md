@@ -1,5 +1,7 @@
-
 # REV-MATCH ASSIST & JERK TELEMETRY
+
+- [本番アプリ（車載メーター）を開く](https://ryota-hiura.github.io/revmatch/)
+- [検証用シミュレーター（PC向け）を開く](https://ryota-hiura.github.io/revmatch/simulator.html)
 
 OBD2非対応のネオクラシック・マニュアルトランスミッション車（初期ターゲット：**1991年式 Porsche 928 GT / 5速MT / 5.0L V8**）向けに開発した、車両無加工・スマートフォン完結型のドライビング支援＆テレメトリWebアプリケーションです。
 
