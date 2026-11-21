@@ -119,12 +119,14 @@
       height: 100dvh;
       overflow: hidden;
       display: grid;
-      grid-template-columns: minmax(150px, 16vw) minmax(0, 1fr) minmax(150px, 16vw);
-      grid-template-rows: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) clamp(150px, 18vw, 230px);
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
       grid-template-areas:
-        "header dashboard details"
-        "controls dashboard debug";
-      column-gap: clamp(6px, 1vw, 14px);
+        "dashboard header"
+        "dashboard controls"
+        "dashboard details"
+        "dashboard debug";
+      column-gap: 4px;
       align-items: stretch;
     }
     body > header {
@@ -147,6 +149,8 @@
       grid-area: details;
       width: 100%;
       max-width: none;
+      max-height: 100%;
+      overflow: auto;
       margin: 0;
       align-self: start;
     }
@@ -163,6 +167,7 @@
       max-width: none;
       margin: 0;
       grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 2px;
       align-items: stretch;
     }
     .dashboard .dial-card:nth-child(1) { order: 1; }
