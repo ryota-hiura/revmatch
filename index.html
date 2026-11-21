@@ -115,7 +115,13 @@
   .slider-row input[type="range"] { flex: 1; }
   @media (orientation: landscape) {
     body { display: flex; flex-direction: column; }
-    .dashboard { flex: 1; min-height: 0; }
+    .dashboard {
+      flex: 1;
+      min-height: 0;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .dashboard .dial-card:nth-child(1) { order: 1; }
+    .dashboard .dial-card:nth-child(2) { order: 2; }
     .dial-face { max-height: min(68vh, 440px); max-height: min(68dvh, 440px); }
   }
   @media (max-height: 430px) and (orientation: landscape) {
@@ -128,8 +134,16 @@
     details { padding: 5px 8px; }
   }
   @media (orientation: portrait) {
-    .dashboard { grid-template-columns: 1fr; }
-    .dial-face { max-height: min(48vh, 340px); }
+    .dashboard {
+      grid-template-columns: 1fr;
+      max-width: min(92vw, 430px);
+    }
+    .dashboard .dial-card:nth-child(1) { order: 2; }
+    .dashboard .dial-card:nth-child(2) { order: 1; }
+    .dial-face {
+      width: 100%;
+      max-height: min(43dvh, 340px);
+    }
   }
 </style>
 </head>
@@ -146,6 +160,7 @@
 <div class="controls-bar">
   <button id="btnStart" class="primary">マイク＆GPS計測開始</button>
   <button id="btnBeep">ガイド音: ON</button>
+  <button id="btnScreen">全画面・画面ON</button>
 </div>
 
 <div class="dashboard">
@@ -165,7 +180,7 @@
       <text class="digital-unit" id="speedSource" x="160" y="161">KM/H · GPS</text>
       <circle class="needle-hub" cx="160" cy="175" r="8"/>
     </svg>
-  </div>
+  </section>
   <section class="dial-card" aria-label="タコメーターとシフトダウン目標回転数">
     <svg class="dial-face" id="tachDial" viewBox="0 0 320 270" role="img" aria-labelledby="tachTitle">
       <path class="dial-bg" d="M 68 267 A 130 130 0 1 1 252 267 Z"/>
@@ -190,7 +205,7 @@
       <circle class="needle-hub" cx="160" cy="175" r="8"/>
       <text class="digital-rpm" id="dispRpm" x="160" y="224">0 RPM</text>
     </svg>
-  </div>
+  </section>
 </div>
 
 <details>
@@ -234,6 +249,7 @@ const PROFILES = {
 let currentProfile = PROFILES["928gt"];
 let isRunning = false;
 let beepEnabled = true;
+let screenWakeLock = null;
 
 // Audio / FFT
 let audioCtx, analyser, freqData;
@@ -315,6 +331,80 @@ document.getElementById('carProfile').addEventListener('change', (e) => {
 document.getElementById('btnBeep').addEventListener('click', (e) => {
   beepEnabled = !beepEnabled;
   e.target.textContent = `ガイド音: ${beepEnabled ? 'ON' : 'OFF'}`;
+});
+
+let screenModeActive = false;
+
+async function acquireScreenWakeLock() {
+  if (!('wakeLock' in navigator)) {
+    document.getElementById('btnScreen').textContent = '全画面・画面ON (Wake Lock非対応)';
+    return;
+  }
+  try {
+    screenWakeLock = await navigator.wakeLock.request('screen');
+    screenWakeLock.addEventListener('release', () => {
+      screenWakeLock = null;
+    });
+  } catch (err) {
+    console.warn('Screen Wake Lock:', err);
+  }
+}
+
+async function toggleScreenMode() {
+  const btn = document.getElementById('btnScreen');
+
+  if (screenModeActive) {
+    screenModeActive = false;
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+      document.webkitExitFullscreen();
+    } else if (document.exitFullscreen) {
+      await document.exitFullscreen();
+    }
+    if (screenWakeLock) {
+      await screenWakeLock.release();
+    }
+    btn.classList.remove('active');
+    btn.textContent = '全画面・画面ON';
+    return;
+  }
+
+  screenModeActive = true;
+  const root = document.documentElement;
+  try {
+    if (root.requestFullscreen) {
+      await root.requestFullscreen();
+    } else if (root.webkitRequestFullscreen) {
+      await root.webkitRequestFullscreen();
+    }
+  } catch (err) {
+    console.warn('Fullscreen:', err);
+  }
+  await acquireScreenWakeLock();
+  btn.classList.add('active');
+  btn.textContent = screenWakeLock ? '全画面・画面ON: 有効' : btn.textContent;
+}
+
+document.getElementById('btnScreen').addEventListener('click', toggleScreenMode);
+
+document.addEventListener('fullscreenchange', () => {
+  const btn = document.getElementById('btnScreen');
+  if (!document.fullscreenElement) {
+    if (screenModeActive) btn.textContent = screenWakeLock ? '全画面・画面ON: 有効' : '全画面・画面ON';
+  }
+});
+document.addEventListener('webkitfullscreenchange', () => {
+  const btn = document.getElementById('btnScreen');
+  if (!document.webkitFullscreenElement) {
+    if (screenModeActive) btn.textContent = screenWakeLock ? '全画面・画面ON: 有効' : '全画面・画面ON';
+  }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && screenModeActive && !screenWakeLock) {
+    acquireScreenWakeLock();
+  }
 });
 
 document.getElementById('sliderSpeed').addEventListener('input', (e) => {
