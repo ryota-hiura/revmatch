@@ -344,6 +344,7 @@ simChannel.onmessage = (e) => {
 // === UIイベント ===
 document.getElementById('carProfile').addEventListener('change', (e) => {
   currentProfile = PROFILES[e.target.value];
+  smoothedRpm = 0;
   engagedGear = null;
   referenceGear = null;
 });
@@ -481,60 +482,78 @@ function playTargetBeep() {
   osc.stop(audioCtx.currentTime + 0.06);
 }
 
-// === FFTピーク検出（放物線補間＋倍音トラッキング） ===
+// === FFT調波スコア検出（放物線補間） ===
 function detectEngineRpm() {
   analyser.getFloatFrequencyData(freqData);
   const sampleRate = audioCtx.sampleRate;
   const binWidth = sampleRate / analyser.fftSize;
 
-  // 爆発係数: 4ストローク気筒数 / 2 回転 -> Hz = RPM * (cyl / 120) -> RPM = Hz * (120 / cyl)
+  // 4ストロークの点火周波数: Hz = RPM * (cyl / 120)
   const hzToRpm = 120 / currentProfile.cylinders;
-  const minHz = 600 / hzToRpm;
-  const maxHz = (currentProfile.redline + 500) / hzToRpm;
-
-  const minBin = Math.max(2, Math.floor(minHz / binWidth));
-  const maxBin = Math.min(freqData.length - 2, Math.ceil(maxHz / binWidth));
-
-  let bestBin = -1;
+  const minRpm = 600;
+  const maxRpm = currentProfile.redline + 500;
+  const rpmStep = 10;
+  const engineOrders = [1, 2, 4, 8];
+  const scores = [];
   let bestScore = -Infinity;
+  let bestIndex = -1;
 
-  for (let i = minBin; i <= maxBin; i++) {
-    const db = freqData[i];
-    if (db < -75) continue; // ノイズフロア以下は無視
+  for (let rpm = minRpm; rpm <= maxRpm; rpm += rpmStep) {
+    let score = 0;
+    let hasSignal = false;
 
-    const candRpm = i * binWidth * hzToRpm;
-    let score = db;
+    // クランク回転周波数の1/2/4/8次成分を調べ、調波が揃う候補を優先する
+    for (const order of engineOrders) {
+      const bin = (rpm * order / 60) / binWidth;
+      const lowerBin = Math.floor(bin);
+      const upperBin = Math.min(freqData.length - 1, lowerBin + 1);
+      const fraction = bin - lowerBin;
+      const db = freqData[lowerBin] * (1 - fraction) + freqData[upperBin] * fraction;
+      score += db;
+      if (db >= -75) hasSignal = true;
+    }
 
-    // 前フレームのRPMがある場合は連続性を優遇（オクターブ飛び防止）
+    const index = scores.length;
+    if (!hasSignal) {
+      scores.push(-Infinity);
+      continue;
+    }
+
+    // 前フレームのRPMがある場合は連続性を優遇
     if (smoothedRpm > 700) {
-      const diffRatio = Math.abs(candRpm - smoothedRpm) / smoothedRpm;
+      const diffRatio = Math.abs(rpm - smoothedRpm) / smoothedRpm;
       if (diffRatio < 0.25) {
         score += 12 * (1 - diffRatio / 0.25);
       }
     }
 
+    scores.push(score);
     if (score > bestScore) {
       bestScore = score;
-      bestBin = i;
+      bestIndex = index;
     }
   }
 
-  if (bestBin === -1) {
+  if (bestIndex === -1) {
     smoothedRpm *= 0.92;
     return { rpm: Math.round(smoothedRpm), hz: 0 };
   }
 
-  // 放物線補間（Parabolic Interpolation）でサブビン精度を算出
-  const alpha = freqData[bestBin - 1];
-  const beta = freqData[bestBin];
-  const gamma = freqData[bestBin + 1];
-  const denom = (alpha - 2 * beta + gamma);
-  const p = denom !== 0 ? 0.5 * (alpha - gamma) / denom : 0;
-  const exactHz = (bestBin + p) * binWidth;
-  const rawRpm = exactHz * hzToRpm;
+  // 隣接候補のスコアを放物線補間して10rpm刻みの段差を抑える
+  let offset = 0;
+  if (bestIndex > 0 && bestIndex < scores.length - 1) {
+    const left = scores[bestIndex - 1];
+    const center = scores[bestIndex];
+    const right = scores[bestIndex + 1];
+    const denom = left - 2 * center + right;
+    if (Number.isFinite(left) && Number.isFinite(right) && denom < 0) {
+      offset = Math.max(-1, Math.min(1, 0.5 * (left - right) / denom));
+    }
+  }
+  const rawRpm = minRpm + (bestIndex + offset) * rpmStep;
 
   smoothedRpm = smoothedRpm === 0 ? rawRpm : smoothedRpm * 0.65 + rawRpm * 0.35;
-  return { rpm: Math.round(smoothedRpm), hz: exactHz.toFixed(1) };
+  return { rpm: Math.round(smoothedRpm), hz: (rawRpm / hzToRpm).toFixed(1) };
 }
 
 // === メインループ ===
