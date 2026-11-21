@@ -281,21 +281,21 @@
   </div>
 </div>
 
-<div class="debug-bar" id="debugInfo">FFT Peak: -- Hz | Ratio: --</div>
+<div class="debug-bar" id="debugInfo">FFT Base: -- Hz | Ratio: --</div>
 
 <script>
 // === 車種プロファイル定義 ===
 const PROFILES = {
   "928gt": {
     name: "1991 Porsche 928 GT (5.0L V8 / 5MT)",
-    cylinders: 8, // 4スト8気筒 = 1回転4爆発 -> RPM = Hz * 15
+    cylinders: 8,
     redline: 6800,
     // 1〜5速の RPM / (km/h) 比率（ファイナル2.73, 245/45ZR16基準）
     gearRatios: [87.07, 58.20, 42.26, 31.87, 23.09]
   },
   "nd5rc": {
     name: "Mazda Roadster ND (1.5L L4 / 6MT)",
-    cylinders: 4, // 4スト4気筒 = 1回転2爆発 -> RPM = Hz * 30
+    cylinders: 4,
     redline: 7500,
     gearRatios: [115.2, 69.5, 48.8, 37.6, 29.8, 24.5]
   }
@@ -407,8 +407,8 @@ document.getElementById('btnStart').addEventListener('click', async () => {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 8192;
-    analyser.smoothingTimeConstant = 0.5;
+    analyser.fftSize = 16384;
+    analyser.smoothingTimeConstant = 0.2;
     source.connect(analyser);
     freqData = new Float32Array(analyser.frequencyBinCount);
 
@@ -481,60 +481,101 @@ function playTargetBeep() {
   osc.stop(audioCtx.currentTime + 0.06);
 }
 
-// === FFTピーク検出（放物線補間＋倍音トラッキング） ===
+// === FFTピーク検出（高調波の整合性からエンジン回転周波数を推定） ===
 function detectEngineRpm() {
   analyser.getFloatFrequencyData(freqData);
   const sampleRate = audioCtx.sampleRate;
   const binWidth = sampleRate / analyser.fftSize;
-
-  // 爆発係数: 4ストローク気筒数 / 2 回転 -> Hz = RPM * (cyl / 120) -> RPM = Hz * (120 / cyl)
-  const hzToRpm = 120 / currentProfile.cylinders;
-  const minHz = 600 / hzToRpm;
-  const maxHz = (currentProfile.redline + 500) / hzToRpm;
-
-  const minBin = Math.max(2, Math.floor(minHz / binWidth));
-  const maxBin = Math.min(freqData.length - 2, Math.ceil(maxHz / binWidth));
-
-  let bestBin = -1;
-  let bestScore = -Infinity;
+  const minHz = 600 / 60;
+  const maxHz = (currentProfile.redline + 500) / 60;
+  const maxHarmonic = 8;
+  const minBin = Math.max(1, Math.floor(minHz / binWidth));
+  const maxBin = Math.min(
+    freqData.length - 2,
+    Math.ceil(maxHz * maxHarmonic / binWidth)
+  );
+  const peaks = [];
 
   for (let i = minBin; i <= maxBin; i++) {
-    const db = freqData[i];
-    if (db < -75) continue; // ノイズフロア以下は無視
+    if (freqData[i] < -75 || freqData[i] < freqData[i - 1] || freqData[i] <= freqData[i + 1]) continue;
 
-    const candRpm = i * binWidth * hzToRpm;
-    let score = db;
-
-    // 前フレームのRPMがある場合は連続性を優遇（オクターブ飛び防止）
-    if (smoothedRpm > 700) {
-      const diffRatio = Math.abs(candRpm - smoothedRpm) / smoothedRpm;
-      if (diffRatio < 0.25) {
-        score += 12 * (1 - diffRatio / 0.25);
-      }
-    }
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestBin = i;
-    }
+    // 放物線補間でピーク位置をサブビン精度にする
+    const alpha = freqData[i - 1];
+    const beta = freqData[i];
+    const gamma = freqData[i + 1];
+    const denom = alpha - 2 * beta + gamma;
+    const offset = denom !== 0 ? Math.max(-0.5, Math.min(0.5, 0.5 * (alpha - gamma) / denom)) : 0;
+    peaks.push({ hz: (i + offset) * binWidth, db: beta });
   }
 
-  if (bestBin === -1) {
+  if (peaks.length === 0) {
     smoothedRpm *= 0.92;
     return { rpm: Math.round(smoothedRpm), hz: 0 };
   }
 
-  // 放物線補間（Parabolic Interpolation）でサブビン精度を算出
-  const alpha = freqData[bestBin - 1];
-  const beta = freqData[bestBin];
-  const gamma = freqData[bestBin + 1];
-  const denom = (alpha - 2 * beta + gamma);
-  const p = denom !== 0 ? 0.5 * (alpha - gamma) / denom : 0;
-  const exactHz = (bestBin + p) * binWidth;
-  const rawRpm = exactHz * hzToRpm;
+  // 各ピークを高調波とみなした基底周波数候補を作り、複数ピークとの整合性を採点
+  const candidates = [];
+  peaks.forEach(peak => {
+    for (let harmonic = 1; harmonic <= maxHarmonic; harmonic++) {
+      const hz = peak.hz / harmonic;
+      if (hz >= minHz && hz <= maxHz) candidates.push(hz);
+    }
+  });
+  candidates.sort((a, b) => a - b);
+  const uniqueCandidates = candidates.filter((hz, index) =>
+    index === 0 || hz - candidates[index - 1] > binWidth * 0.1
+  );
+
+  let bestHz = 0;
+  let bestScore = -Infinity;
+  uniqueCandidates.forEach(candidateHz => {
+    let score = 0;
+    const usedPeaks = new Set();
+
+    for (let harmonic = 1; harmonic <= maxHarmonic; harmonic++) {
+      const targetHz = candidateHz * harmonic;
+      let nearestIndex = -1;
+      let nearestDiff = Infinity;
+      peaks.forEach((peak, index) => {
+        const diff = Math.abs(peak.hz - targetHz);
+        const tolerance = Math.max(binWidth * 1.1, targetHz * 0.035);
+        if (!usedPeaks.has(index) && diff <= tolerance && diff < nearestDiff) {
+          nearestIndex = index;
+          nearestDiff = diff;
+        }
+      });
+
+      if (nearestIndex !== -1) {
+        usedPeaks.add(nearestIndex);
+        const peakStrength = Math.max(0, peaks[nearestIndex].db + 75);
+        let weight = harmonic === 1 ? 1.5 : 1 / Math.sqrt(harmonic);
+        if (harmonic === currentProfile.cylinders / 2) weight += 1.5;
+        score += peakStrength * weight;
+      }
+    }
+
+    // 前フレームとの連続性で一時的な別ピークへの飛びを抑える
+    const candidateRpm = candidateHz * 60;
+    if (smoothedRpm > 700) {
+      const diffRatio = Math.abs(candidateRpm - smoothedRpm) / smoothedRpm;
+      if (diffRatio < 0.25) score += 6 * (1 - diffRatio / 0.25);
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestHz = candidateHz;
+    }
+  });
+
+  if (bestHz === 0) {
+    smoothedRpm *= 0.92;
+    return { rpm: Math.round(smoothedRpm), hz: 0 };
+  }
+
+  const rawRpm = bestHz * 60;
 
   smoothedRpm = smoothedRpm === 0 ? rawRpm : smoothedRpm * 0.65 + rawRpm * 0.35;
-  return { rpm: Math.round(smoothedRpm), hz: exactHz.toFixed(1) };
+  return { rpm: Math.round(smoothedRpm), hz: bestHz.toFixed(1) };
 }
 
 // === メインループ ===
@@ -625,7 +666,7 @@ function updateUI(rpm, hz, ratio, t1Rpm, t2Rpm) {
   document.getElementById('dispSpeed').textContent = Math.round(currentSpeedKmh);
   document.getElementById('dispRpm').textContent = rpm;
   document.getElementById('dispJerk').textContent = `Jerk: ${currentJerk.toFixed(1)} m/s³`;
-  document.getElementById('debugInfo').textContent = `FFT Peak: ${hz} Hz | N/V Ratio: ${ratio.toFixed(2)}`;
+  document.getElementById('debugInfo').textContent = `FFT Base: ${hz} Hz | N/V Ratio: ${ratio.toFixed(2)}`;
 
   const gearEl = document.getElementById('dispGear');
   const statusEl = document.getElementById('dispGearStatus');
