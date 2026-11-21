@@ -41,7 +41,7 @@
 <h1>928GT VIRTUAL TEST BENCH (V8 SOUND & TELEMETRY)</h1>
 
 <div style="display:flex; gap:10px; margin-bottom:12px;">
-  <button id="btnAudio" class="primary" style="flex:1;">1. エンジン始動（基音＋倍音）</button>
+  <button id="btnAudio" class="primary" style="flex:1;">1. エンジン始動（V8サウンドON）</button>
   <button id="btnScenario" style="flex:1;">2. 自動シフトダウン模擬テスト</button>
 </div>
 
@@ -59,7 +59,7 @@
   <div class="box">
     <div class="label">ENGINE RPM</div>
     <div class="val" id="simRpm">2550</div>
-    <div class="label" id="simHz">42.5 Hz 基音 / 170.0 Hz 爆発音</div>
+    <div class="label" id="simHz">170.0 Hz</div>
   </div>
 </div>
 
@@ -85,19 +85,13 @@
 
 <div class="info">
   <strong>検証の使い方：</strong><br>
-  1. 「エンジン始動」を押すとPCスピーカーからエンジン回転の基音（RPM ÷ 60 Hz）と1・2・4・8次成分が鳴ります。V8の爆発音に相当する4次成分を強め、3・6次成分は含めていません。<br>
+  1. 「エンジン始動」を押すとPCスピーカーから928GTのV8爆発周波数（RPM ÷ 15 Hz）の合成音が鳴ります。<br>
   2. スマホの <code>index.html</code> で「マイク＆センサー開始」を押し、スマホの検証用スライダーを上の <strong>VIRTUAL SPEED</strong> に合わせてください（同じPCの別タブなら速度・加速度は自動同期されます）。<br>
   3. 「自動シフトダウン模擬テスト」を押すか、手動で「クラッチ踏む → ブリッピング煽り → シフトダウン → クラッチ離す」を操作すると、スマホ側がターゲット回転数到達とシフトショック（ジャーク）を判定します。
 </div>
 
 <script>
 const RATIOS = [87.07, 58.20, 42.26, 31.87, 23.09];
-const HARMONICS = [
-  { multiple: 1, gain: 0.22 },
-  { multiple: 2, gain: 0.10 },
-  { multiple: 4, gain: 0.28 },
-  { multiple: 8, gain: 0.04 }
-];
 let speedKmh = 80;
 let gear = 4;
 let rpm = 2550;
@@ -107,7 +101,7 @@ let brake = 0;
 let prevSpeedMs = speedKmh / 3.6;
 
 // Web Audio V8 Synth
-let audioCtx, harmonicOscillators = [], filterNode, masterGain;
+let audioCtx, oscPrimary, oscSub, oscHarmonic, filterNode, masterGain;
 let isAudioRunning = false;
 
 const simChannel = new BroadcastChannel('928gt_sim_bus');
@@ -116,6 +110,15 @@ document.getElementById('btnAudio').addEventListener('click', (e) => {
   if (isAudioRunning) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
+  // クロスプレーンV8の爆発音合成（基本波 + 0.5次ビート + 2次倍音）
+  oscPrimary = audioCtx.createOscillator();
+  oscSub = audioCtx.createOscillator();
+  oscHarmonic = audioCtx.createOscillator();
+
+  oscPrimary.type = 'sawtooth';
+  oscSub.type = 'triangle';
+  oscHarmonic.type = 'square';
+
   filterNode = audioCtx.createBiquadFilter();
   filterNode.type = 'lowpass';
   filterNode.frequency.value = 350;
@@ -123,21 +126,23 @@ document.getElementById('btnAudio').addEventListener('click', (e) => {
   masterGain = audioCtx.createGain();
   masterGain.gain.value = 0.25;
 
-  harmonicOscillators = HARMONICS.map(({ multiple, gain: level }) => {
-    const oscillator = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    oscillator.type = 'sine';
-    oscillator.frequency.value = (rpm / 60) * multiple;
-    gain.gain.value = level;
-    oscillator.connect(gain).connect(filterNode);
-    oscillator.start();
-    return { oscillator, multiple };
-  });
+  const subGain = audioCtx.createGain();
+  subGain.gain.value = 0.4;
+  const harmGain = audioCtx.createGain();
+  harmGain.gain.value = 0.15;
+
+  oscPrimary.connect(filterNode);
+  oscSub.connect(subGain).connect(filterNode);
+  oscHarmonic.connect(harmGain).connect(filterNode);
 
   filterNode.connect(masterGain).connect(audioCtx.destination);
 
+  oscPrimary.start();
+  oscSub.start();
+  oscHarmonic.start();
+
   isAudioRunning = true;
-  e.target.textContent = 'エンジン稼働中 (基音＋倍音)';
+  e.target.textContent = 'エンジン稼働中 (V8 SOUND ON)';
   e.target.classList.add('active');
 });
 
@@ -279,14 +284,13 @@ setInterval(() => {
     accelMs2
   });
 
-  // 基音はクランクシャフト回転数、4倍音はV8の爆発周波数に相当
-  const rotationHz = rpm / 60;
-  const firingHz = rotationHz * 4;
+  // サウンド周波数更新 (V8: RPM / 15 Hz)
+  const primaryHz = rpm / 15;
   if (isAudioRunning) {
     const now = audioCtx.currentTime;
-    harmonicOscillators.forEach(({ oscillator, multiple }) => {
-      oscillator.frequency.setTargetAtTime(rotationHz * multiple, now, 0.02);
-    });
+    oscPrimary.frequency.setTargetAtTime(primaryHz, now, 0.02);
+    oscSub.frequency.setTargetAtTime(primaryHz * 0.5, now, 0.02);
+    oscHarmonic.frequency.setTargetAtTime(primaryHz * 2.0, now, 0.02);
     // スロットル開度でフィルターを開閉して吸排気音を演出
     filterNode.frequency.setTargetAtTime(200 + throttle * 900 + (rpm / 6800) * 400, now, 0.03);
   }
@@ -297,8 +301,7 @@ setInterval(() => {
   document.getElementById('simClutch').textContent = clutchPressed ? 'CLUTCH OPEN' : 'ENGAGED';
   document.getElementById('simClutch').style.color = clutchPressed ? '#ff3d00' : '#00e676';
   document.getElementById('simRpm').textContent = Math.round(rpm);
-  document.getElementById('simHz').textContent =
-    `${rotationHz.toFixed(1)} Hz 基音 / ${firingHz.toFixed(1)} Hz 爆発音`;
+  document.getElementById('simHz').textContent = `${primaryHz.toFixed(1)} Hz`;
 }, 20);
 </script>
 </body>
